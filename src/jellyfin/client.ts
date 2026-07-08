@@ -49,35 +49,52 @@ export default class JellyfinClient {
         return auth.status == 200;
     }
 
+    private async withRetryAuth<T>(fn: () => Promise<T>): Promise<T> {
+        try {
+            return await fn();
+        } catch (error: any) {
+            if (error?.response?.status === 401 || error?.status === 401) {
+                console.warn("⚠ Token expired, reauthenticating...");
+                await this.authenticate();
+                return fn();
+            }
+            throw error;
+        }
+    }
+
     public async getPlayableMedia() {
-        const viewsResponse = await getUserViewsApi(this._api).getUserViews({
-            userId: this.userId!,
-        });
+        return this.withRetryAuth(async () => {
+            const viewsResponse = await getUserViewsApi(this._api).getUserViews({
+                userId: this.userId!,
+            });
 
-        const views = viewsResponse.data.Items || [];
-        const items = await Promise.all(
-            views.map(async (view) => {
-                const itemsResponse = await this.getSubItemsRecursive(view.Id!);
+            const views = viewsResponse.data.Items || [];
+            const items = await Promise.all(
+                views.map(async (view) => {
+                    const itemsResponse = await this.getSubItemsRecursive(view.Id!);
 
-                return {
-                    itemId: view.Id,
-                    name: view.Name,
-                    subItems: itemsResponse,
-                };
-            })
-        ).catch((e) => {
-            console.error("Failed to get playable media", e);
+                    return {
+                        itemId: view.Id,
+                        name: view.Name,
+                        subItems: itemsResponse,
+                    };
+                })
+            ).catch((e) => {
+                console.error("Failed to get playable media", e);
+            });
+            return items;
         });
-        return items;
     }
 
     public async getSubItems(parent: string) {
-        const itemsResponse = await getItemsApi(this._api).getItems({
-            userId: this.userId!,
-            parentId: parent,
-        });
+        return this.withRetryAuth(async () => {
+            const itemsResponse = await getItemsApi(this._api).getItems({
+                userId: this.userId!,
+                parentId: parent,
+            });
 
-        return itemsResponse.data.Items;
+            return itemsResponse.data.Items;
+        });
     }
 
     public async getSubItemsRecursive(parent: string): Promise<NestedItem[]> {
@@ -143,15 +160,24 @@ export default class JellyfinClient {
 
     // New method to fetch available subtitle streams
     public async getSubtitleStreams(itemId: string) {
-        const url = `${this.serverUrl}/Items/${itemId}?Fields=MediaStreams&api_key=${this.apiKey}`;
-        const response = await fetch(url, {
-            headers: {
-                "User-Agent": JellyfinClient.APP_NAME,
-            },
+        return this.withRetryAuth(async () => {
+            const url = `${this.serverUrl}/Items/${itemId}?Fields=MediaStreams&api_key=${this.apiKey}`;
+            const response = await fetch(url, {
+                headers: {
+                    "User-Agent": JellyfinClient.APP_NAME,
+                },
+            });
+            
+            if (!response.ok) {
+                const error: any = new Error(`Subtitle fetch failed with status ${response.status}`);
+                error.status = response.status;
+                throw error;
+            }
+            
+            const data = await response.json();
+            const subtitleStreams = data.MediaStreams.filter((stream: any) => stream.Type === "Subtitle");
+            return subtitleStreams;
         });
-        const data = await response.json();
-        const subtitleStreams = data.MediaStreams.filter((stream: any) => stream.Type === "Subtitle");
-        return subtitleStreams;
     }
 
     public getRandomItem(items: NestedItem[]): NestedItem | undefined {

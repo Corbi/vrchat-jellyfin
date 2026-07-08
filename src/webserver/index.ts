@@ -49,8 +49,16 @@ app.get("/i", async (req, res) => {
         res.status(503).json({ error: "Not connected to Jellyfin" });
         return;
     }
-    const items = await client.getPlayableMedia();
-    res.json(items);
+    try {
+        const items = await client.getPlayableMedia();
+        res.json(items);
+    } catch (err) {
+        console.error("Error fetching playable media:", err);
+        res.status(500).json({ 
+            error: "Failed to load media items. Please try again later.",
+            details: (err as Error).message
+        });
+    }
 });
 
 // Endpoint to create a proxy with subtitle options

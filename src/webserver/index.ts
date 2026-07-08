@@ -22,8 +22,33 @@ app.get("/", (req, res) => {
     res.sendFile("index.html", { root: "dist/client" });
 });
 
+// Status endpoint - always available
+app.get("/api/status", (req: Request, res: Response) => {
+    res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        jellyfin: {
+            connected: client.userId ? true : false,
+            userId: client.userId || null,
+            serverUrl: client.serverUrl,
+        },
+        features: {
+            hls: true,
+            sync: true,
+            cast: CastManager.getAllCastClients().length > 0,
+        },
+        streams: {
+            active: HLSManager.getActiveStreams().length,
+        },
+    });
+});
+
 // Endpoint to fetch playable media
 app.get("/i", async (req, res) => {
+    if (!client.userId) {
+        res.status(503).json({ error: "Not connected to Jellyfin" });
+        return;
+    }
     const items = await client.getPlayableMedia();
     res.json(items);
 });
@@ -48,6 +73,10 @@ app.post("/i/:id", async (req, res) => {
 
 // Endpoint to fetch subtitle streams
 app.get("/subtitles/:itemId", async (req, res) => {
+    if (!client.userId) {
+        res.status(503).json({ error: "Not connected to Jellyfin" });
+        return;
+    }
     const itemId = req.params.itemId;
     try {
         const subtitleStreams = await client.getSubtitleStreams(itemId);
@@ -64,6 +93,11 @@ app.get("/v/:id", async (req, res) => {
 
     if (!proxy) {
         res.status(404).send("Proxy not found, is your url valid?");
+        return;
+    }
+
+    if (!client.userId) {
+        res.status(503).send("Not connected to Jellyfin");
         return;
     }
 
@@ -96,74 +130,52 @@ app.get("/v/:id", async (req, res) => {
     }
 });
 
-// Start the server after Jellyfin client authentication
-client.authenticate().then((success) => {
-    if (!success) {
-        console.error("Failed to authenticate with Jellyfin server");
-        process.exit(1);
-    }
+// ==================== HLS Endpoints ====================
 
-    const server = http.createServer(app);
-    const port = parseInt(process.env.WEBSERVER_PORT || "4000");
+/**
+ * POST /hls/stream/:proxyId
+ * Create an HLS stream from a video proxy
+ * Returns: { sessionId, playlistUrl }
+ */
+app.post("/hls/stream/:proxyId", async (req: Request, res: Response) => {
+    try {
+        const proxy = ProxyManager.getProxy(req.params.proxyId);
 
-    // Initialize HLS Manager
-    HLSManager.init();
-
-    // Initialize Sync Manager
-    SyncManager.init(server);
-
-    // Create cast device (optional, for Jellyfin integration)
-    CastManager.createCastDevice(
-        client.serverUrl,
-        client.userId!,
-        client.apiKey,
-        `VRChat Jellyfin Player (${process.env.INSTANCE_NAME || "default"})`
-    ).catch((err) => {
-        console.warn("[Cast] Could not initialize cast device:", err.message);
-        console.log("[Cast] Continuing without cast support - streaming will still work");
-    });
-
-    // ==================== HLS Endpoints ====================
-
-    /**
-     * POST /hls/stream/:proxyId
-     * Create an HLS stream from a video proxy
-     * Returns: { sessionId, playlistUrl }
-     */
-    app.post("/hls/stream/:proxyId", async (req: Request, res: Response) => {
-        try {
-            const proxy = ProxyManager.getProxy(req.params.proxyId);
-
-            if (!proxy) {
-                res.status(404).json({ error: "Proxy not found" });
-                return;
-            }
-
-            const itemId = proxy.itemId;
-            const options = proxy.options;
-
-            // Get video stream from Jellyfin
-            const response = await client.getVideoStream(itemId!, options);
-            if (!response.ok || !response.body) {
-                res.status(502).json({ error: "Failed to fetch video stream from Jellyfin" });
-                return;
-            }
-
-            // Create HLS stream from video stream
-            const hlsSessionId = HLSManager.createStream(response.body as any);
-
-            res.json({
-                sessionId: hlsSessionId,
-                playlistUrl: `/hls/playlist/${hlsSessionId}.m3u8`,
-                itemId: itemId,
-            });
-
-            console.log(`[HLS] Stream created: ${hlsSessionId} for item ${itemId}`);
-        } catch (err) {
-            console.error("[HLS] Error creating stream:", err);
-            res.status(500).json({ error: "Internal server error" });
+        if (!proxy) {
+            res.status(404).json({ error: "Proxy not found" });
+            return;
         }
-    });
+
+        if (!client.userId) {
+            res.status(503).json({ error: "Not connected to Jellyfin" });
+            return;
+        }
+
+        const itemId = proxy.itemId;
+        const options = proxy.options;
+
+        // Get video stream from Jellyfin
+        const response = await client.getVideoStream(itemId!, options);
+        if (!response.ok || !response.body) {
+            res.status(502).json({ error: "Failed to fetch video stream from Jellyfin" });
+            return;
+        }
+
+        // Create HLS stream from video stream
+        const hlsSessionId = HLSManager.createStream(response.body as any);
+
+        res.json({
+            sessionId: hlsSessionId,
+            playlistUrl: `/hls/playlist/${hlsSessionId}.m3u8`,
+            itemId: itemId,
+        });
+
+        console.log(`[HLS] Stream created: ${hlsSessionId} for item ${itemId}`);
+    } catch (err) {
+        console.error("[HLS] Error creating stream:", err);
+        res.status(500).json({ error: "Internal server error" });
+    }
+});
 
     /**
      * GET /hls/playlist/:sessionId.m3u8
@@ -367,10 +379,10 @@ client.authenticate().then((success) => {
     // ==================== Server Startup ====================
 
     server.listen(port, () => {
-        console.log(`Webserver listening on port ${port}`);
-        console.log(`HLS streams available at: http://localhost:${port}/hls/`);
-        console.log(`WebSocket sync at: ws://localhost:${port}/sync`);
-        console.log(`Cast devices: http://localhost:${port}/cast/devices`);
+        console.log(`✓ Webserver listening on port ${port}`);
+        console.log(`  HLS streams: http://localhost:${port}/hls/`);
+        console.log(`  WebSocket sync: ws://localhost:${port}/sync`);
+        console.log(`  API status: http://localhost:${port}/api/status`);
     });
 
     // Graceful shutdown
@@ -384,4 +396,64 @@ client.authenticate().then((success) => {
             process.exit(0);
         });
     });
+}
+
+// Start the server after Jellyfin client authentication (or timeout)
+let serverStarted = false;
+const authPromise = client.authenticate()
+    .then((success) => {
+        if (success) {
+            console.log("✓ Connected to Jellyfin");
+        } else {
+            console.warn("⚠ Failed to authenticate with Jellyfin");
+            console.log("  Please verify: JELLYFIN_HOST, JELLYFIN_USERNAME, JELLYFIN_PASSWORD");
+        }
+        return success;
+    })
+    .catch((err) => {
+        console.warn("⚠ Jellyfin connection error:", (err as Error).message);
+        console.log("  Server will still function for HLS and WebSocket sync");
+        return false;
+    });
+
+// Set timeout so server starts even if auth hangs
+const serverStartTimeout = setTimeout(() => {
+    if (!serverStarted) {
+        console.warn("⚠ Jellyfin auth timeout - starting server anyway");
+        startServer();
+    }
+}, 15000);
+
+authPromise.finally(() => {
+    clearTimeout(serverStartTimeout);
+    if (!serverStarted) {
+        startServer();
+    }
 });
+
+function startServer() {
+    if (serverStarted) return;
+    serverStarted = true;
+
+    const server = http.createServer(app);
+    const port = parseInt(process.env.WEBSERVER_PORT || "4000");
+
+    // Initialize HLS Manager
+    HLSManager.init();
+
+    // Initialize Sync Manager
+    SyncManager.init(server);
+
+    // Create cast device (optional, for Jellyfin integration)
+    if (client.userId) {
+        CastManager.createCastDevice(
+            client.serverUrl,
+            client.userId,
+            client.apiKey,
+            `VRChat Jellyfin Player (${process.env.INSTANCE_NAME || "default"})`
+        ).catch((err) => {
+            console.warn("[Cast] Could not initialize cast device:", (err as Error).message);
+        });
+    } else {
+        console.log("[Cast] Skipped (not connected to Jellyfin)");
+    }

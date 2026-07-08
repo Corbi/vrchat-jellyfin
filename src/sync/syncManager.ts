@@ -14,7 +14,19 @@ export interface PlaybackState {
 }
 
 export interface SyncMessage {
-  type: "sync" | "play" | "pause" | "seek" | "join" | "leave" | "heartbeat";
+  type:
+    | "sync"
+    | "play"
+    | "pause"
+    | "seek"
+    | "join"
+    | "leave"
+    | "heartbeat"
+    | "joined"
+    | "ready"
+    | "client_joined"
+    | "client_left"
+    | "sync_correction";
   payload: any;
 }
 

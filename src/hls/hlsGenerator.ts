@@ -61,7 +61,7 @@ export class HLSGenerator extends EventEmitter {
       );
       const playlistPath = path.join(this.segmentDir, "playlist.m3u8");
 
-      this.ffmpegProcess = ffmpeg(inputStream)
+      const command = ffmpeg(inputStream)
         .outputOptions([
           "-c:v",
           encodingSettings.videoCodec || "h264",
@@ -101,8 +101,10 @@ export class HLSGenerator extends EventEmitter {
             error: err.message,
           });
           reject(err);
-        })
-        .run();
+        });
+
+      this.ffmpegProcess = command;
+      command.run();
 
       // Monitor segment creation
       this.monitorSegments();

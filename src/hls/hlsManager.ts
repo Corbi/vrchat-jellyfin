@@ -62,8 +62,7 @@ export class HLSManager {
    * Get all active streams
    */
   static getActiveStreams() {
-    return Array.from(HLSManager.streams.entries()).map(([id, gen]) => ({
-      sessionId: id,
+    return Array.from(HLSManager.streams.entries()).map(([, gen]) => ({
       ...gen.getSessionInfo(),
     }));
   }

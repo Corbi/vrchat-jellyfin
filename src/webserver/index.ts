@@ -112,13 +112,16 @@ client.authenticate().then((success) => {
     // Initialize Sync Manager
     SyncManager.init(server);
 
-    // Create cast device
+    // Create cast device (optional, for Jellyfin integration)
     CastManager.createCastDevice(
         client.serverUrl,
         client.userId!,
         client.apiKey,
         `VRChat Jellyfin Player (${process.env.INSTANCE_NAME || "default"})`
-    );
+    ).catch((err) => {
+        console.warn("[Cast] Could not initialize cast device:", err.message);
+        console.log("[Cast] Continuing without cast support - streaming will still work");
+    });
 
     // ==================== HLS Endpoints ====================
 

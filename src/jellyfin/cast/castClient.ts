@@ -51,63 +51,13 @@ export class JellyfinCastClient {
    */
   public async register(): Promise<boolean> {
     try {
-      const deviceInfo = {
-        DeviceId: this.deviceId,
-        DeviceName: this.deviceName,
-        DeviceType: "VRChat",
-        AppVersion: process.env.npm_package_version || "1.0.0",
-        Capabilities: {
-          PlayableMediaTypes: ["Video", "Audio"],
-          SupportedCommands: [
-            "PlayVideo",
-            "PlayAudio",
-            "PlayItemWithArgument",
-            "SetRepeatMode",
-            "ToggleMute",
-            "SetAudioStreamIndex",
-            "SetSubtitleStreamIndex",
-            "Mute",
-            "Unmute",
-            "VolumeUp",
-            "VolumeDown",
-            "SetVolume",
-            "Stop",
-            "Pause",
-            "Unpause",
-            "NextTrack",
-            "PreviousTrack",
-            "Seek",
-          ],
-          SupportsSyncPlayGroups: true,
-          SupportsUniqueIdentifier: true,
-        },
-      };
-
-      const url = `${this.serverUrl}/Sessions?api_key=${this.accessToken}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": `VRChat Jellyfin/${process.env.npm_package_version || "1.0.0"}`,
-        },
-        body: JSON.stringify(deviceInfo),
-      });
-
-      if (response.status === 200 || response.status === 201) {
-        console.log(`[CastClient] Device registered: ${this.deviceId}`);
-
-        // Start heartbeat
-        this.startHeartbeat();
-        return true;
-      } else {
-        console.error(
-          `[CastClient] Failed to register device: ${response.status} ${response.statusText}`
-        );
-        return false;
-      }
+      // Jellyfin device registration happens via heartbeat/activity
+      // We don't need to explicitly register, just report activity
+      console.log(`[CastClient] Device initialized: ${this.deviceId} (${this.deviceName})`);
+      this.startHeartbeat();
+      return true;
     } catch (err) {
-      console.error("[CastClient] Error registering device:", err);
+      console.error("[CastClient] Error initializing device:", err);
       return false;
     }
   }

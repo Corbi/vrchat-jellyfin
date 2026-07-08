@@ -30,13 +30,15 @@ export class CastManager {
       if (registered) {
         const deviceInfo = castClient.getDeviceInfo();
         CastManager.castClients.set(deviceInfo.deviceId, castClient);
+        console.log(`[CastManager] Cast device registered successfully`);
         return castClient;
       }
 
+      console.warn("[CastManager] Cast device initialization failed");
       return null;
     } catch (err) {
       console.error("[CastManager] Error creating cast device:", err);
-      return null;
+      throw err;
     }
   }
 

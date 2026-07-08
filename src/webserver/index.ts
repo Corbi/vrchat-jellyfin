@@ -1,10 +1,14 @@
 // src/webserver/index.ts
 
-import express from "express";
+import express, { Request, Response } from "express";
 import http from "http";
 import ProxyManager from "../jellyfin/proxy/proxyManager";
 import { client } from "../jellyfin";
 import { ProxyOptions, SubtitleMethod } from "../jellyfin/proxy/proxy";
+import { HLSManager } from "../hls/hlsManager";
+import { SyncManager } from "../sync/syncManager";
+import { CastManager } from "../jellyfin/cast/castManager";
+import fs from "fs";
 
 const app = express();
 
@@ -102,7 +106,279 @@ client.authenticate().then((success) => {
     const server = http.createServer(app);
     const port = parseInt(process.env.WEBSERVER_PORT || "4000");
 
+    // Initialize HLS Manager
+    HLSManager.init();
+
+    // Initialize Sync Manager
+    SyncManager.init(server);
+
+    // Create cast device
+    CastManager.createCastDevice(
+        client.serverUrl,
+        client.userId!,
+        client.apiKey,
+        `VRChat Jellyfin Player (${process.env.INSTANCE_NAME || "default"})`
+    );
+
+    // ==================== HLS Endpoints ====================
+
+    /**
+     * POST /hls/stream/:proxyId
+     * Create an HLS stream from a video proxy
+     * Returns: { sessionId, playlistUrl }
+     */
+    app.post("/hls/stream/:proxyId", async (req: Request, res: Response) => {
+        try {
+            const proxy = ProxyManager.getProxy(req.params.proxyId);
+
+            if (!proxy) {
+                res.status(404).json({ error: "Proxy not found" });
+                return;
+            }
+
+            const itemId = proxy.itemId;
+            const options = proxy.options;
+
+            // Get video stream from Jellyfin
+            const response = await client.getVideoStream(itemId!, options);
+            if (!response.ok || !response.body) {
+                res.status(502).json({ error: "Failed to fetch video stream from Jellyfin" });
+                return;
+            }
+
+            // Create HLS stream from video stream
+            const hlsSessionId = HLSManager.createStream(response.body as any);
+
+            res.json({
+                sessionId: hlsSessionId,
+                playlistUrl: `/hls/playlist/${hlsSessionId}.m3u8`,
+                itemId: itemId,
+            });
+
+            console.log(`[HLS] Stream created: ${hlsSessionId} for item ${itemId}`);
+        } catch (err) {
+            console.error("[HLS] Error creating stream:", err);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    /**
+     * GET /hls/playlist/:sessionId.m3u8
+     * Get the HLS playlist
+     */
+    app.get("/hls/playlist/:sessionId.m3u8", (req: Request, res: Response) => {
+        const generator = HLSManager.getStream(req.params.sessionId);
+
+        if (!generator) {
+            res.status(404).send("Stream not found");
+            return;
+        }
+
+        res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+        res.setHeader("Cache-Control", "no-cache");
+        res.send(generator.getPlaylist());
+    });
+
+    /**
+     * GET /hls/segment/:sessionId/:filename
+     * Get a specific HLS segment
+     */
+    app.get("/hls/segment/:sessionId/:filename", (req: Request, res: Response) => {
+        const generator = HLSManager.getStream(req.params.sessionId);
+
+        if (!generator) {
+            res.status(404).send("Stream not found");
+            return;
+        }
+
+        const segmentPath = generator.getSegmentFile(req.params.filename);
+
+        if (!segmentPath || !fs.existsSync(segmentPath)) {
+            res.status(404).send("Segment not found");
+            return;
+        }
+
+        res.setHeader("Content-Type", "video/mp2t");
+        res.setHeader("Cache-Control", "public, max-age=3600");
+        res.sendFile(segmentPath);
+    });
+
+    /**
+     * GET /hls/status/:sessionId
+     * Get HLS stream status
+     */
+    app.get("/hls/status/:sessionId", (req: Request, res: Response) => {
+        const generator = HLSManager.getStream(req.params.sessionId);
+
+        if (!generator) {
+            res.status(404).json({ error: "Stream not found" });
+            return;
+        }
+
+        res.json(generator.getSessionInfo());
+    });
+
+    /**
+     * DELETE /hls/stop/:sessionId
+     * Stop and delete HLS stream
+     */
+    app.delete("/hls/stop/:sessionId", (req: Request, res: Response) => {
+        const stopped = HLSManager.stopStream(req.params.sessionId);
+
+        if (stopped) {
+            res.json({ message: "Stream stopped" });
+        } else {
+            res.status(404).json({ error: "Stream not found" });
+        }
+    });
+
+    /**
+     * GET /hls/streams
+     * Get all active HLS streams
+     */
+    app.get("/hls/streams", (req: Request, res: Response) => {
+        res.json(HLSManager.getActiveStreams());
+    });
+
+    // ==================== Cast Endpoints ====================
+
+    /**
+     * POST /cast/register/:itemId
+     * Register playback of an item on the cast device
+     */
+    app.post("/cast/register/:itemId", async (req: Request, res: Response) => {
+        try {
+            const itemId = req.params.itemId;
+            const castClients = CastManager.getAllCastClients();
+
+            if (castClients.length === 0) {
+                res.status(503).json({ error: "No cast clients available" });
+                return;
+            }
+
+            const castClient = castClients[0];
+            const hlsSessionId = req.body.hlsSessionId || `hls-${Date.now()}`;
+
+            // Report playback start to Jellyfin
+            await castClient.reportPlaybackStart(itemId, hlsSessionId);
+
+            res.json({
+                message: "Playback registered",
+                deviceId: castClient.getDeviceInfo().deviceId,
+                hlsSessionId,
+            });
+        } catch (err) {
+            console.error("[Cast] Error registering playback:", err);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    /**
+     * POST /cast/progress
+     * Report playback progress
+     */
+    app.post("/cast/progress", async (req: Request, res: Response) => {
+        try {
+            const { itemId, hlsSessionId, positionSeconds, durationSeconds } = req.body;
+
+            const castClients = CastManager.getAllCastClients();
+            if (castClients.length === 0) {
+                res.status(503).json({ error: "No cast clients available" });
+                return;
+            }
+
+            const castClient = castClients[0];
+            await castClient.reportPlaybackProgress(
+                itemId,
+                hlsSessionId,
+                positionSeconds,
+                durationSeconds
+            );
+
+            res.json({ message: "Progress reported" });
+        } catch (err) {
+            console.error("[Cast] Error reporting progress:", err);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    /**
+     * POST /cast/stop
+     * Report playback stop
+     */
+    app.post("/cast/stop", async (req: Request, res: Response) => {
+        try {
+            const { itemId, hlsSessionId, positionSeconds } = req.body;
+
+            const castClients = CastManager.getAllCastClients();
+            if (castClients.length === 0) {
+                res.status(503).json({ error: "No cast clients available" });
+                return;
+            }
+
+            const castClient = castClients[0];
+            await castClient.reportPlaybackStop(itemId, hlsSessionId, positionSeconds);
+
+            res.json({ message: "Playback stopped" });
+        } catch (err) {
+            console.error("[Cast] Error stopping playback:", err);
+            res.status(500).json({ error: "Internal server error" });
+        }
+    });
+
+    /**
+     * GET /cast/devices
+     * Get all registered cast devices
+     */
+    app.get("/cast/devices", (req: Request, res: Response) => {
+        const devices = CastManager.getAllCastClients().map((c) =>
+            c.getDeviceInfo()
+        );
+        res.json(devices);
+    });
+
+    // ==================== Sync Endpoints ====================
+
+    /**
+     * GET /sync/sessions
+     * Get all active sync sessions
+     */
+    app.get("/sync/sessions", (req: Request, res: Response) => {
+        res.json(SyncManager.getActiveSessions());
+    });
+
+    /**
+     * GET /sync/session/:sessionId
+     * Get state of a specific sync session
+     */
+    app.get("/sync/session/:sessionId", (req: Request, res: Response) => {
+        const state = SyncManager.getSessionState(req.params.sessionId);
+
+        if (state) {
+            res.json(state);
+        } else {
+            res.status(404).json({ error: "Session not found" });
+        }
+    });
+
+    // ==================== Server Startup ====================
+
     server.listen(port, () => {
         console.log(`Webserver listening on port ${port}`);
+        console.log(`HLS streams available at: http://localhost:${port}/hls/`);
+        console.log(`WebSocket sync at: ws://localhost:${port}/sync`);
+        console.log(`Cast devices: http://localhost:${port}/cast/devices`);
+    });
+
+    // Graceful shutdown
+    process.on("SIGINT", () => {
+        console.log("\nShutting down gracefully...");
+        HLSManager.shutdown();
+        SyncManager.shutdown();
+        CastManager.shutdown();
+        server.close(() => {
+            console.log("Server closed");
+            process.exit(0);
+        });
     });
 });

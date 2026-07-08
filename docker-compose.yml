@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   vrchat-jellyfin:
-    image: ghcr.io/orcachillin/vrchat-jellyfin:master
+    build: https://github.com/Corbi/vrchat-jellyfin.git#master
+    
     container_name: vrchat-jellyfin
     restart: unless-stopped
     ports:

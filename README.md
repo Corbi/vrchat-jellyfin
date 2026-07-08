@@ -37,7 +37,7 @@ Docker Compose (recommended):
 version: '3'
 services:
   vrchat-jellyfin:
-    image: ghcr.io/orcachillin/vrchat-jellyfin:master
+    image: ghcr.io/corbi/vrchat-jellyfin:master
     container_name: vrchat-jellyfin
     restart: unless-stopped
     ports:

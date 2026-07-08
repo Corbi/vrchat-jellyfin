@@ -70,14 +70,19 @@ export class JellyfinCastClient {
       try {
         const url = `${this.serverUrl}/Sessions/Me/Playing/Ping?api_key=${this.accessToken}`;
 
-        await fetch(url, {
+        const response = await fetch(url, {
           method: "POST",
           headers: {
             "User-Agent": `VRChat Jellyfin/${process.env.npm_package_version || "1.0.0"}`,
           },
         });
+
+        if (!response.ok && response.status !== 401) {
+          console.debug(`[CastClient] Heartbeat returned status ${response.status}`);
+        }
       } catch (err) {
-        console.error("[CastClient] Heartbeat error:", err);
+        // Silently ignore heartbeat errors - they're not critical
+        // A 401 means no active session, which is fine
       }
     }, this.HEARTBEAT_INTERVAL);
   }
@@ -139,7 +144,7 @@ export class JellyfinCastClient {
         IsPaused: false,
       };
 
-      await fetch(url, {
+      const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -147,8 +152,12 @@ export class JellyfinCastClient {
         },
         body: JSON.stringify(progressInfo),
       });
+
+      if (!response.ok) {
+        console.debug(`[CastClient] Progress report returned status ${response.status}`);
+      }
     } catch (err) {
-      console.error("[CastClient] Error reporting playback progress:", err);
+      console.debug("[CastClient] Error reporting playback progress:", (err as Error).message);
     }
   }
 

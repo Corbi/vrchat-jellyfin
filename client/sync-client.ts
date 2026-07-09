@@ -8,7 +8,8 @@
 export interface PlaybackState {
   sessionId: string;
   itemId: string;
-  playbackTime: number;
+  time: number; // Add 'time' property
+  playbackTime: number; // Add 'playbackTime' property
   isPlaying: boolean;
   duration: number;
   clientId: string;
@@ -102,14 +103,15 @@ export class VRChatSyncClient {
       return;
     }
 
-    this.currentState = {
-      sessionId: this.sessionId,
-      itemId: "",
-      playbackTime,
-      isPlaying,
-      duration,
-      clientId: this.clientId,
-    };
+      this.currentState = {
+        sessionId: this.sessionId,
+        itemId: "",
+        time: playbackTime, // Update 'time' property
+        playbackTime,
+        isPlaying,
+        duration,
+        clientId: this.clientId,
+      };
 
     this.send({
       type: "sync",
@@ -140,6 +142,10 @@ export class VRChatSyncClient {
       type: "pause",
       payload: { sessionId: this.sessionId },
     });
+    if (this.currentState) {
+      this.currentState.isPlaying = false;
+      this.eventCallbacks.onStateUpdate?.(this.currentState);
+    }
   }
 
   /**
@@ -165,13 +171,9 @@ export class VRChatSyncClient {
   /**
    * Start periodic synchronization
    */
-  public startAutoSync(
-    getPlaybackState: () => {
-      time: number;
-      isPlaying: boolean;
-      duration: number;
-    }
-  ): void {
+public startAutoSync(
+  getPlaybackState: () => PlaybackState
+): void {
     if (this.syncInterval !== null) {
       return;
     }
@@ -287,11 +289,12 @@ export class VRChatSyncClient {
           console.log(
             `[SyncClient] Sync correction received: ${message.payload.playbackTime.toFixed(2)}s`
           );
-          if (this.currentState) {
-            this.currentState.playbackTime = message.payload.playbackTime;
-            this.currentState.isPlaying = message.payload.isPlaying;
-            this.eventCallbacks.onSyncCorrection?.(this.currentState);
-          }
+            if (this.currentState) {
+              this.currentState.time = message.payload.playbackTime; // Update 'time' property
+              this.currentState.playbackTime = message.payload.playbackTime;
+              this.currentState.isPlaying = message.payload.isPlaying;
+              this.eventCallbacks.onSyncCorrection?.(this.currentState);
+            }
           break;
 
         case "client_joined":
